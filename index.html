@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fitness</title>
+<style>
+  :root { color-scheme: light dark; --accent: #2e7d5b; }
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 640px; margin: 0 auto; padding: 16px; }
+  nav, #filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  button { font: inherit; padding: 8px 14px; border: 1px solid #8888; border-radius: 8px; background: none; color: inherit; cursor: pointer; }
+  nav button { flex: 1; font-weight: 600; }
+  button[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #8884; }
+  li span:first-child { flex: 1; }
+  .row, details { flex: 1; }
+  .row { display: flex; gap: 12px; align-items: center; }
+  summary { cursor: pointer; }
+  summary::before { content: '▸'; }
+  details[open] summary::before { content: '▾'; }
+  .anim { position: relative; margin-top: 10px; }
+  .anim img { display: block; width: 100%; border-radius: 8px; }
+  .anim img + img { position: absolute; inset: 0; animation: flip 1.6s steps(1) infinite; }
+  @keyframes flip { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .anim img + img { position: static; animation: none; margin-top: 8px; } }
+  small { opacity: .7; }
+  form, .goals { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+  input { font: inherit; padding: 8px; border: 1px solid #8888; border-radius: 8px; min-width: 0; }
+  form input[name=food], form input[name=email] { flex: 1 1 160px; }
+  input[type=number] { width: 90px; }
+  progress { width: 100%; accent-color: var(--accent); }
+  label { display: block; }
+</style>
+
+<nav aria-label="Sections">
+  <button data-tab="home">Home</button>
+  <button data-tab="gym">Gym</button>
+  <button data-tab="diet">Diet</button>
+</nav>
+
+<section id="exercises">
+  <div id="filters" aria-label="Muscle group"></div>
+  <ul id="list"></ul>
+</section>
+
+<section id="diet" hidden>
+  <form id="auth" hidden>
+    <input name="email" type="email" placeholder="Email, to sync across devices" aria-label="Email" required>
+    <button>Send sign-in link</button>
+  </form>
+  <p><small id="sync" role="status"></small> <button id="out" hidden>Sign out</button></p>
+  <label>Calories: <b id="kcalText"></b><progress id="kcalBar"></progress></label>
+  <label>Protein: <b id="proteinText"></b><progress id="proteinBar"></progress></label>
+  <div class="goals">
+    <label>Calorie goal <input type="number" id="goalKcal" min="0"></label>
+    <label>Protein goal (g) <input type="number" id="goalProtein" min="0"></label>
+  </div>
+  <form id="add">
+    <input name="food" placeholder="Food" aria-label="Food" required>
+    <input name="kcal" type="number" min="0" placeholder="kcal" aria-label="Calories" required>
+    <input name="protein" type="number" min="0" placeholder="protein g" aria-label="Protein in grams">
+    <button>Add</button>
+  </form>
+  <ul id="meals"></ul>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+// Fill both in to sync through Supabase (table in supabase.sql). The anon key is public by design:
+// row-level security is what keeps each user's rows private. Left empty, the app saves in this browser only.
+const SUPABASE_URL = '', SUPABASE_KEY = '';
+const sb = SUPABASE_URL && window.supabase ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+let user = null;
+
+const $ = id => document.getElementById(id);
+
+// [name, muscle group, where, suggested volume, image id in free-exercise-db (public domain)]
+const IMG = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/';
+const EX = [
+  ['Push-ups', 'Chest', 'home', '3 × 12', 'Pushups'],
+  ['Decline push-ups (feet on chair)', 'Chest', 'home', '3 × 10', 'Decline_Push-Up'],
+  ['Pike push-ups', 'Shoulders', 'home', '3 × 8'],
+  ['Chair dips', 'Arms', 'home', '3 × 12', 'Bench_Dips'],
+  ['Backpack curls', 'Arms', 'home', '3 × 12', 'Dumbbell_Bicep_Curl'],
+  ['Backpack rows', 'Back', 'home', '3 × 12', 'Bent_Over_Two-Dumbbell_Row'],
+  ['Superman hold', 'Back', 'home', '3 × 30s', 'Superman'],
+  ['Squats', 'Legs', 'home', '3 × 20', 'Bodyweight_Squat'],
+  ['Lunges', 'Legs', 'home', '3 × 12 each', 'Bodyweight_Walking_Lunge'],
+  ['Glute bridge', 'Legs', 'home', '3 × 15', 'Butt_Lift_Bridge'],
+  ['Plank', 'Core', 'home', '3 × 45s', 'Plank'],
+  ['Bicycle crunches', 'Core', 'home', '3 × 20', 'Air_Bike'],
+  ['Mountain climbers', 'Core', 'home', '3 × 30s', 'Mountain_Climbers'],
+  ['Burpees', 'Cardio', 'home', '3 × 10'],
+  ['Star jumps', 'Cardio', 'home', '3 × 60s', 'Star_Jump'],
+  ['Butt kicks', 'Cardio', 'home', '3 × 30s', 'Double_Leg_Butt_Kick'],
+  ['Bench press', 'Chest', 'gym', '4 × 8', 'Barbell_Bench_Press_-_Medium_Grip'],
+  ['Incline dumbbell press', 'Chest', 'gym', '3 × 10', 'Incline_Dumbbell_Press'],
+  ['Cable fly', 'Chest', 'gym', '3 × 12', 'Cable_Crossover'],
+  ['Overhead press', 'Shoulders', 'gym', '4 × 8', 'Standing_Military_Press'],
+  ['Lateral raise', 'Shoulders', 'gym', '3 × 15', 'Side_Lateral_Raise'],
+  ['Barbell curl', 'Arms', 'gym', '3 × 10', 'Barbell_Curl'],
+  ['Tricep pushdown', 'Arms', 'gym', '3 × 12', 'Triceps_Pushdown'],
+  ['Deadlift', 'Back', 'gym', '3 × 5', 'Barbell_Deadlift'],
+  ['Lat pulldown', 'Back', 'gym', '3 × 10', 'Wide-Grip_Lat_Pulldown'],
+  ['Seated cable row', 'Back', 'gym', '3 × 10', 'Seated_Cable_Rows'],
+  ['Barbell squat', 'Legs', 'gym', '4 × 8', 'Barbell_Squat'],
+  ['Leg press', 'Legs', 'gym', '3 × 12', 'Leg_Press'],
+  ['Romanian deadlift', 'Legs', 'gym', '3 × 10', 'Romanian_Deadlift'],
+  ['Leg curl', 'Legs', 'gym', '3 × 12', 'Lying_Leg_Curls'],
+  ['Hanging leg raise', 'Core', 'gym', '3 × 10', 'Hanging_Leg_Raise'],
+  ['Cable crunch', 'Core', 'gym', '3 × 15', 'Cable_Crunch'],
+  ['Treadmill intervals', 'Cardio', 'gym', '15 min', 'Running_Treadmill'],
+  ['Rowing machine', 'Cardio', 'gym', '10 min', 'Rowing_Stationary'],
+];
+const GROUPS = ['All', ...new Set(EX.map(e => e[1]))];
+
+let tab = 'home', group = 'All';
+
+// shortcut: only today's meals are kept (reset on a new day), add per-date storage if history is wanted
+const today = new Date().toDateString();
+let diet = JSON.parse(localStorage.getItem('diet') || 'null');
+if (!diet || diet.date !== today)
+  diet = { date: today, items: [], goal: diet?.goal ?? { kcal: 2000, protein: 120 } };
+
+const total = (items, key) => items.reduce((sum, i) => sum + i[key], 0);
+console.assert(total([{ kcal: 1 }, { kcal: 2 }], 'kcal') === 3, 'total() broken');
+
+function el(tag, text) {
+  const e = document.createElement(tag);
+  e.textContent = text; // textContent, never innerHTML: food names are user input
+  return e;
+}
+
+function render() {
+  document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tab === tab));
+  $('exercises').hidden = tab === 'diet';
+  $('diet').hidden = tab !== 'diet';
+
+  if (tab !== 'diet') {
+    $('filters').replaceChildren(...GROUPS.map(g => {
+      const b = el('button', g);
+      b.setAttribute('aria-pressed', g === group);
+      b.onclick = () => { group = g; render(); };
+      return b;
+    }));
+    $('list').replaceChildren(...EX
+      .filter(e => e[2] === tab && (group === 'All' || e[1] === group))
+      .map(([name, g, , volume, img]) => {
+        const li = el('li', '');
+        const row = el(img ? 'summary' : 'div', '');
+        row.className = 'row';
+        row.append(el('span', name), el('small', g), el('b', volume));
+        if (!img) { li.append(row); return li; }
+        const d = el('details', ''), anim = el('div', '');
+        anim.className = 'anim';
+        for (const n of [0, 1]) { // two frames, flipped by CSS; lazy so they load only when opened
+          const i = new Image();
+          i.loading = 'lazy';
+          i.alt = n ? '' : name + ' demonstration';
+          i.src = `${IMG}${img}/${n}.jpg`;
+          anim.append(i);
+        }
+        d.append(row, anim);
+        li.append(d);
+        return li;
+      }));
+    return;
+  }
+
+  for (const key of ['kcal', 'protein']) {
+    const sum = total(diet.items, key), goal = diet.goal[key];
+    $(key + 'Text').textContent = `${sum} / ${goal}${key === 'protein' ? ' g' : ''}`;
+    $(key + 'Bar').max = goal || 1;
+    $(key + 'Bar').value = sum;
+  }
+  $('goalKcal').value = diet.goal.kcal;
+  $('goalProtein').value = diet.goal.protein;
+  $('meals').replaceChildren(...diet.items.map((item, i) => {
+    const li = el('li', '');
+    const del = el('button', '✕');
+    del.setAttribute('aria-label', 'Remove ' + item.food);
+    del.onclick = () => { diet.items.splice(i, 1); save(); };
+    li.append(el('span', item.food), el('small', `${item.kcal} kcal · ${item.protein} g`), del);
+    return li;
+  }));
+}
+
+function renderAuth(msg) {
+  $('auth').hidden = !sb || !!user;
+  $('out').hidden = !user;
+  $('sync').textContent = msg ?? (user ? 'Synced as ' + user.email : sb ? '' : 'Saved in this browser only');
+}
+
+async function save() {
+  localStorage.setItem('diet', JSON.stringify(diet));
+  render();
+  if (!user) return;
+  const day = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, local time
+  const { error } = await sb.from('diet_days').upsert({ day, data: diet });
+  renderAuth(error && 'Not synced: ' + error.message);
+}
+
+// shortcut: last write wins, today's cloud copy replaces the local one on sign-in; merge items if two devices are used offline
+async function pull() {
+  const { data, error } = await sb.from('diet_days').select('data').order('day', { ascending: false }).limit(1);
+  if (error) return renderAuth('Not synced: ' + error.message);
+  const latest = data[0]?.data;
+  if (latest?.date === today) diet = latest;
+  else if (latest && !diet.items.length) diet.goal = latest.goal;
+  save();
+}
+
+document.querySelector('nav').onclick = e => {
+  if (e.target.dataset.tab) { tab = e.target.dataset.tab; render(); }
+};
+$('add').onsubmit = e => {
+  e.preventDefault();
+  const f = e.target;
+  diet.items.push({ food: f.food.value.trim(), kcal: f.kcal.valueAsNumber || 0, protein: f.protein.valueAsNumber || 0 });
+  f.reset();
+  f.food.focus();
+  save();
+};
+$('goalKcal').onchange = e => { diet.goal.kcal = Math.max(0, e.target.valueAsNumber || 0); save(); };
+$('goalProtein').onchange = e => { diet.goal.protein = Math.max(0, e.target.valueAsNumber || 0); save(); };
+
+$('auth').onsubmit = async e => {
+  e.preventDefault();
+  const { error } = await sb.auth.signInWithOtp({
+    email: e.target.email.value,
+    options: { emailRedirectTo: location.origin + location.pathname },
+  });
+  renderAuth(error ? error.message : 'Check your email for the sign-in link');
+};
+$('out').onclick = () => sb.auth.signOut();
+sb?.auth.onAuthStateChange((_event, session) => {
+  user = session?.user ?? null;
+  renderAuth();
+  if (user) setTimeout(pull); // supabase-js deadlocks if queried inside this callback
+});
+
+render();
+renderAuth();
+</script>
+</html>
